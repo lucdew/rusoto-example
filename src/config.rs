@@ -1,3 +1,4 @@
+use chrono::prelude::*;
 use errors;
 use errors::*;
 use read_input::prelude::*;
@@ -8,7 +9,6 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::path::Path;
-use chrono::prelude::*;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -39,18 +39,15 @@ impl Config {
             .get();
 
         if use_default_creds_str == "y" {
-            config.aws_use_default_credentials = false;
+            config.aws_use_default_credentials = true;
         } else {
-             config.aws_use_default_credentials = true;
+            config.aws_use_default_credentials = false;
         }
 
-        if ! config.aws_use_default_credentials {
-            config.aws_access_key_id = input::<String>()
-                .msg("Enter your aws access key:\n")
-                .get();
-            config.aws_secret_access_key = input::<String>()
-                .msg("Enter your aws secret key:\n")
-                .get();
+        if !config.aws_use_default_credentials {
+            config.aws_access_key_id = input::<String>().msg("Enter your aws access key:\n").get();
+            config.aws_secret_access_key =
+                input::<String>().msg("Enter your aws secret key:\n").get();
         }
 
         config.aws_mfa_device_arn = input::<String>()
@@ -58,7 +55,6 @@ impl Config {
             .add_test(|x| x.starts_with("arn"))
             .err("That does not look like a valid response. Please try again")
             .get();
-
 
         Ok(config)
     }
@@ -69,14 +65,14 @@ impl Config {
         ))?;
         let config_path = Path::new(home_dir.as_path()).join(".awsManager.json");
 
-        let mut config:Config;
+        let mut config: Config;
 
-        if  config_path.exists() {
-            let mut config_file =
-                File::open(&config_path).chain_err(|| format!("could not read {:?}", config_path))?;
+        if config_path.exists() {
+            let mut config_file = File::open(&config_path)
+                .chain_err(|| format!("could not read {:?}", config_path))?;
             let mut data = String::new();
             config_file.read_to_string(&mut data)?;
-            config=serde_json::from_str(&data).chain_err(|| "Invalid json in awsManager.json")?;
+            config = serde_json::from_str(&data).chain_err(|| "Invalid json in awsManager.json")?;
         } else {
             config = Self::init()?
         }
@@ -101,14 +97,13 @@ impl Config {
 
     pub fn is_token_valid(&self) -> bool {
         if self.aws_session_token.is_none() {
-            return false
+            return false;
         }
 
         return match self.aws_session_expiration {
             Some(x) => Utc::now().timestamp_millis() < x.timestamp_millis(),
             None => false,
-        }
-
+        };
     }
 }
 

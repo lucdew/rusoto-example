@@ -1,10 +1,11 @@
-use ::errors::*;
-use hyper_proxy::{Intercept, Proxy, ProxyConnector};
+use errors::*;
 use hyper::Uri;
+use hyper_proxy::{Intercept, Proxy, ProxyConnector};
 use hyper_tls::HttpsConnector;
 
 // TODO fix to more generic type
-pub type HttpConnector = hyper_proxy::ProxyConnector<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>;
+pub type HttpConnector =
+    hyper_proxy::ProxyConnector<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>;
 
 pub fn new_connector() -> Result<HttpConnector> {
     if let Ok(proxy_url) = std::env::var("http_proxy") {

@@ -1,11 +1,11 @@
 use errors::*;
 
-use ::client::HttpConnector;
+use client::HttpConnector;
 use config;
 use read_input::prelude::*;
 
-use rusoto_core::request;
 use rusoto_core::region::Region;
+use rusoto_core::request;
 use rusoto_credential::StaticProvider;
 use rusoto_sts::{AssumeRoleRequest, GetSessionTokenRequest, Sts, StsClient};
 
@@ -18,9 +18,11 @@ pub struct Credentials {
     pub aws_sts_token: String,
 }
 
-pub fn update_temp_credentials(config: &mut config::Config, connector: HttpConnector) -> Result<()> {
-
-    if ! config.is_token_valid() {
+pub fn update_temp_credentials(
+    config: &mut config::Config,
+    connector: HttpConnector,
+) -> Result<()> {
+    if !config.is_token_valid() {
         let mfa: String = input().msg("Please enter your mfa:\n").get();
 
         let cred_provider = StaticProvider::new(
@@ -51,7 +53,10 @@ pub fn update_temp_credentials(config: &mut config::Config, connector: HttpConne
         config.aws_temp_access_key_id = Some(credentials.access_key_id);
         config.aws_temp_secret_access_key = Some(credentials.secret_access_key);
         config.aws_session_token = Some(credentials.session_token);
-        config.aws_session_expiration = Some(DateTime::parse_from_rfc3339(&credentials.expiration).chain_err(|| "Invalid token expiration format")?);
+        config.aws_session_expiration = Some(
+            DateTime::parse_from_rfc3339(&credentials.expiration)
+                .chain_err(|| "Invalid token expiration format")?,
+        );
 
         config.persist()?;
     }
@@ -72,7 +77,7 @@ pub fn assume_role(
     let client = request::HttpClient::from_connector(connector);
     let sts_client = StsClient::new_with(client, cred_provider, Region::EuWest1);
 
-    println!("Assuming role {}",role_arn.to_string());
+    println!("Assuming role {}", role_arn.to_string());
 
     let assume_role_request = AssumeRoleRequest {
         role_arn: role_arn.to_string(),

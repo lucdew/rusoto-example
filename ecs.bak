@@ -1,0 +1,168 @@
+use std::collections::HashMap;
+use std::vec::Vec;
+
+use client::HttpConnector;
+use credentials::Credentials;
+use errors::*;
+
+use futures::future::join_all;
+use futures::sync::oneshot::spawn;
+use futures::Future;
+
+use tokio_core::reactor::Core;
+
+use rusoto_core::region::Region;
+use rusoto_core::request;
+use rusoto_credential::StaticProvider;
+
+use rusoto_ecs::{
+    DescribeServicesRequest, DescribeTaskDefinitionRequest, DescribeTaskDefinitionResponse, Ecs,
+    EcsClient, ListClustersRequest, ListServicesRequest, TaskDefinition,
+};
+
+fn get_image_short_name(image_name: String) -> Option<String> {
+    image_name
+        .clone()
+        .split("/")
+        .last()
+        .map(|astr| astr.to_owned())
+}
+
+pub fn get_clusters(ecs_client: &EcsClient) -> Result<Vec<String>> {
+    let mut clusters = Vec::new();
+
+    let mut next_token: Option<String>;
+
+    loop {
+        let list_clusters_req = ListClustersRequest {
+            max_results: None,
+            next_token: None,
+        };
+        let list_clusters_res = ecs_client
+            .list_clusters(list_clusters_req)
+            .sync()
+            .chain_err(|| "Failed listing clusters")?;
+        next_token = list_clusters_res.next_token;
+        match list_clusters_res.cluster_arns {
+            Some(cluster_arns) => clusters.append(&mut cluster_arns.clone()),
+            None => (),
+        }
+        if next_token.is_none() {
+            break;
+        }
+    }
+
+    Ok(clusters)
+}
+
+pub fn get_images_of_a_cluster(
+    ecs_client: &EcsClient,
+    cluster_name: String,
+) -> Result<Vec<String>> {
+    let mut next_token: Option<String> = None;
+
+    let mut images = Vec::new();
+
+    loop {
+        let list_services_req = ListServicesRequest {
+            max_results: None,
+            next_token: next_token.clone(),
+            cluster: Some(cluster_name.clone()),
+            launch_type: None,
+            scheduling_strategy: None,
+        };
+
+        let list_services_res = ecs_client
+            .list_services(list_services_req)
+            .sync()
+            .chain_err(|| "failed listing services")?;
+
+        next_token = list_services_res.next_token;
+
+        if list_services_res.service_arns.is_none() {
+            println!("no arns");
+            return Ok(images);
+        }
+
+        let describe_services_req = DescribeServicesRequest {
+            cluster: Some(cluster_name.clone()),
+            services: list_services_res.service_arns.unwrap(),
+        };
+
+        let describe_services_res = ecs_client
+            .describe_services(describe_services_req)
+            .sync()
+            .chain_err(|| "Failed describing services")?;
+
+        if describe_services_res.services.is_none() {
+            return Ok(images);
+        }
+
+        let descriptions = describe_services_res.services.unwrap();
+
+        let mut core = Core::new().unwrap();
+
+        let get_images_futures = descriptions.into_iter().map(|service| {
+            let task_definition_req = DescribeTaskDefinitionRequest {
+                task_definition: service.task_definition.unwrap(),
+            };
+
+            ecs_client
+                .describe_task_definition(task_definition_req)
+                .map(|task_definition_res| {
+                    task_definition_res
+                        .task_definition
+                        .and_then(|td| td.container_definitions)
+                        .and_then(|cds| cds.last().cloned())
+                        .and_then(|cd| cd.image)
+                        .and_then(|image| get_image_short_name(image) )
+                })
+        });
+
+        let fetched_images = core
+            .run(join_all(get_images_futures))
+            .chain_err(|| "Could not get images of services")?;
+
+        for image in fetched_images {
+            if image.is_some() {
+                images.push(image.unwrap());
+            }
+        }
+
+        if next_token.is_none() {
+            break;
+        }
+    }
+
+    Ok(images)
+}
+
+pub fn get_images_of_clusters(
+    connector: HttpConnector,
+    credentials: Credentials,
+) -> Result<HashMap<String, Vec<String>>> {
+    let mut res = HashMap::new();
+
+    let cred_provider = StaticProvider::new(
+        credentials.aws_access_key,
+        credentials.aws_secret_key,
+        Some(credentials.aws_sts_token),
+        None,
+    );
+
+    let client = request::HttpClient::from_connector(connector);
+
+    let ecs_client = EcsClient::new_with(client, cred_provider, Region::EuWest1);
+
+    let clusters = get_clusters(&ecs_client)?;
+
+    println!("Got clusters {:?}", clusters);
+
+    for cluster_name in clusters {
+        println!("Getting images {}", cluster_name);
+        let images = get_images_of_a_cluster(&ecs_client, cluster_name);
+        println!("Got images {:?}", images);
+    }
+
+    Ok(res)
+}
