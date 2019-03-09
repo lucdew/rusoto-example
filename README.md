@@ -1,10 +1,12 @@
 # Description
 
-Just an example using Rusoto AWS Rust library through a http proxy. It uses the STS, ECS and credentials AWS services.
+Just an example using [Rusoto](https://rusoto.github.io/rusoto/rusoto_core/index.html) AWS Rust library through a http proxy and [Tokio](https://github.com/tokio-rs/tokio) futures combinators.
+
+It uses the STS, ECS and credentials AWS services.
 
 The example here supposes that your organization has multiple AWS accounts and MFA authentication is required.
 
-The program just list the ECS clusters.
+The program list the lastest ECS images in all ECS clusters.
 
 The first execution will ask for aws mfa device ARN, optionally the AWS access and secret keys and persist them.
 
@@ -20,5 +22,4 @@ cargo run -- "arn:aws:iam::123456789:role/MyRoleInTheOrganization"
 
 I am just learning Rust so the code is not surely idiomatic Rust.
 
-Error management in my example is also not consistent
-
+Error management in my example is also not consistent.
