@@ -1,13 +1,13 @@
-use errors::*;
-
-use client::HttpConnector;
-use config;
+use crate::client::HttpClient;
+use crate::config;
 use read_input::prelude::*;
 
+use anyhow::Context;
+use anyhow::Result;
 use rusoto_core::region::Region;
-use rusoto_core::request;
 use rusoto_credential::StaticProvider;
 use rusoto_sts::{AssumeRoleRequest, GetSessionTokenRequest, Sts, StsClient};
+use std::sync::Arc;
 
 use chrono::prelude::*;
 
@@ -18,9 +18,9 @@ pub struct Credentials {
     pub aws_sts_token: String,
 }
 
-pub fn update_temp_credentials(
+pub async fn update_temp_credentials(
     config: &mut config::Config,
-    connector: HttpConnector,
+    client: Arc<HttpClient>,
 ) -> Result<()> {
     if !config.is_token_valid() {
         let mfa: String = input().msg("Please enter your mfa:\n").get();
@@ -32,8 +32,6 @@ pub fn update_temp_credentials(
             None,
         );
 
-        let client = request::HttpClient::from_connector(connector);
-
         let sts_client = StsClient::new_with(client, cred_provider, Region::EuWest1);
 
         let get_session_token = GetSessionTokenRequest {
@@ -43,19 +41,19 @@ pub fn update_temp_credentials(
         };
         let get_session_token_res = sts_client
             .get_session_token(get_session_token)
-            .sync()
-            .chain_err(|| "Failed getting STS credentials")?;
+            .await
+            .context("Failed getting STS credentials")?;
 
         let credentials = get_session_token_res
             .credentials
-            .ok_or(ErrorKind::InvalidConfig("Got not credentials".to_string()))?;
+            .context("Got not credentials")?;
 
         config.aws_temp_access_key_id = Some(credentials.access_key_id);
         config.aws_temp_secret_access_key = Some(credentials.secret_access_key);
         config.aws_session_token = Some(credentials.session_token);
         config.aws_session_expiration = Some(
             DateTime::parse_from_rfc3339(&credentials.expiration)
-                .chain_err(|| "Invalid token expiration format")?,
+                .context("Invalid token expiration format")?,
         );
 
         config.persist()?;
@@ -63,9 +61,9 @@ pub fn update_temp_credentials(
     Ok(())
 }
 
-pub fn assume_role(
+pub async fn assume_role(
     config: &config::Config,
-    connector: HttpConnector,
+    client: Arc<HttpClient>,
     role_arn: &String,
 ) -> Result<Credentials> {
     let cred_provider = StaticProvider::new(
@@ -74,29 +72,24 @@ pub fn assume_role(
         config.aws_session_token.clone(),
         None,
     );
-    let client = request::HttpClient::from_connector(connector);
     let sts_client = StsClient::new_with(client, cred_provider, Region::EuWest1);
 
     println!("Assuming role {}", role_arn.to_string());
 
     let assume_role_request = AssumeRoleRequest {
-        role_arn: role_arn.to_string(),
+        role_arn: role_arn.to_owned(),
         role_session_name: "dummy".to_owned(),
-        duration_seconds: None,
-        external_id: None,
-        policy: None,
-        serial_number: None,
-        token_code: None,
+        ..Default::default()
     };
 
     let assume_role_res = sts_client
         .assume_role(assume_role_request)
-        .sync()
-        .chain_err(|| "Failed assuming role")?;
+        .await
+        .context("Failed assuming role")?;
 
-    let credentials = assume_role_res.credentials.ok_or(ErrorKind::InvalidConfig(
-        "Missing credentials from assume role".to_string(),
-    ))?;
+    let credentials = assume_role_res
+        .credentials
+        .context("Missing credentials from assume role")?;
 
     Ok(Credentials {
         aws_access_key: credentials.access_key_id,

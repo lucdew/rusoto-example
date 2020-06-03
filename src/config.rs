@@ -1,6 +1,6 @@
+use anyhow::Context;
+use anyhow::Result;
 use chrono::prelude::*;
-use errors;
-use errors::*;
 use read_input::prelude::*;
 use regex::Regex;
 use rusoto_core::region::Region;
@@ -38,7 +38,7 @@ impl Config {
             .err("That does not look like a valid response. Please try again")
             .get();
 
-        if use_default_creds_str == "y" {
+        if use_default_creds_str.to_lowercase() == "y" {
             config.aws_use_default_credentials = true;
         } else {
             config.aws_use_default_credentials = false;
@@ -59,20 +59,18 @@ impl Config {
         Ok(config)
     }
 
-    pub fn load() -> Result<(Config)> {
-        let home_dir = dirs::home_dir().ok_or(ErrorKind::InvalidConfig(
-            "Missing home directory".to_string(),
-        ))?;
+    pub fn load() -> Result<Config> {
+        let home_dir = dirs::home_dir().context("Missing home directory")?;
         let config_path = Path::new(home_dir.as_path()).join(".awsManager.json");
 
         let mut config: Config;
 
         if config_path.exists() {
             let mut config_file = File::open(&config_path)
-                .chain_err(|| format!("could not read {:?}", config_path))?;
+                .with_context(|| format!("could not read {:?}", config_path))?;
             let mut data = String::new();
             config_file.read_to_string(&mut data)?;
-            config = serde_json::from_str(&data).chain_err(|| "Invalid json in awsManager.json")?;
+            config = serde_json::from_str(&data).context("Invalid json in awsManager.json")?;
         } else {
             config = Self::init()?
         }
@@ -86,9 +84,7 @@ impl Config {
     }
 
     pub fn persist(&self) -> Result<()> {
-        let home_dir = dirs::home_dir().ok_or(ErrorKind::InvalidConfig(
-            "Missing home directory".to_string(),
-        ))?;
+        let home_dir = dirs::home_dir().context("Missing home directory")?;
         let config_path = Path::new(home_dir.as_path()).join(".awsManager.json");
         let f = File::create(config_path)?;
         serde_json::to_writer_pretty(f, self)?;
@@ -108,19 +104,13 @@ impl Config {
 }
 
 fn get_default_aws_credentials() -> Result<(String, String)> {
-    let home_dir = dirs::home_dir().ok_or(errors::ErrorKind::InvalidConfig(
-        "Missing home directory".to_string(),
-    ))?;
+    let home_dir = dirs::home_dir().context("Missing home directory")?;
     let mut p = Path::new(home_dir.as_path()).join(".aws/credentials");
     if !p.exists() {
-        let config_dir = dirs::config_dir().ok_or(errors::ErrorKind::InvalidConfig(
-            "Missing config directory".to_string(),
-        ))?;
+        let config_dir = dirs::config_dir().context("Missing config directory")?;
         p = Path::new(config_dir.as_path()).join(".aws/credentials");
         if !p.exists() {
-            Err(ErrorKind::InvalidConfig(
-                "No aws credentials configuration found".to_string(),
-            ))?;
+            Err(anyhow!("No aws credentials configuration found"))?;
         }
     }
     let config_file = File::open(p.as_path())?;
@@ -163,9 +153,7 @@ fn get_default_aws_credentials() -> Result<(String, String)> {
         }
     }
     if aws_secret_key.is_none() || aws_secret_key.is_none() {
-        Err(ErrorKind::InvalidConfig(
-            format!("No aws credentials found in {}", p.to_str().unwrap()).to_string(),
-        ))?;
+        Err(anyhow!("No aws credentials found in {:?}", p))?;
     }
 
     Ok((aws_access_key.unwrap(), aws_secret_key.unwrap()))

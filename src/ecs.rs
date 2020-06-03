@@ -1,15 +1,14 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::vec::Vec;
 
-use client::HttpConnector;
-use credentials::Credentials;
-use errors::*;
+use crate::client::HttpClient;
+use crate::credentials::Credentials;
+use anyhow::Result;
 
-use futures::future::{join_all, loop_fn, ok, Either, Loop};
-use futures::Future;
+use futures::future::join_all;
 
 use rusoto_core::region::Region;
-use rusoto_core::request;
 use rusoto_credential::StaticProvider;
 
 use rusoto_ecs::{
@@ -17,174 +16,142 @@ use rusoto_ecs::{
     ListServicesRequest,
 };
 
-pub fn get_all_services<'a>(
-    ecs_client: &'a EcsClient,
+pub async fn get_image_of_task_definition(
+    ecs_client: &EcsClient,
+    task_definition: String,
+) -> Result<Option<String>> {
+    let task_definition_req = DescribeTaskDefinitionRequest {
+        task_definition,
+        include: None,
+    };
+    let task_definition_res = ecs_client
+        .describe_task_definition(task_definition_req)
+        .await?;
+
+    Ok(task_definition_res
+        .task_definition
+        .and_then(|td| td.container_definitions)
+        .and_then(|cds| cds.last().map(|cd| cd.clone()))
+        .and_then(move |cd| cd.image))
+}
+
+async fn get_images_of_services(
+    ecs_client: &EcsClient,
+    service_arns: Vec<String>,
     cluster_name: String,
-) -> impl Future<Item = Vec<String>, Error = Error> + 'a {
-    loop_fn((Vec::new(), None), move |(mut services, next_token)| {
+) -> Result<Vec<String>> {
+    let mut images: Vec<String> = Vec::new();
+    let describe_services_req = DescribeServicesRequest {
+        cluster: Some(cluster_name.clone()),
+        services: service_arns,
+        include: None,
+    };
+
+    let describe_services_res = ecs_client.describe_services(describe_services_req).await?;
+
+    if let Some(services) = describe_services_res.services {
+        let task_definitions: Vec<String> = services
+            .into_iter()
+            .filter_map(|service| service.task_definition)
+            .collect();
+        let get_images_futures = task_definitions
+            .into_iter()
+            .map(|td| get_image_of_task_definition(ecs_client, td));
+
+        let get_images_results = join_all(get_images_futures).await;
+
+        let get_images_result: Result<Vec<Option<String>>> =
+            get_images_results.into_iter().collect();
+
+        let some_images: Vec<String> = get_images_result?
+            .into_iter()
+            .filter_map(|image_opt| image_opt)
+            .collect();
+        images.extend(some_images);
+    }
+
+    Ok(images)
+}
+
+pub async fn get_images_of_a_cluster(
+    ecs_client: &EcsClient,
+    cluster_name: String,
+) -> Result<(String, Vec<String>)> {
+    let mut next_token: Option<String> = None;
+
+    let mut all_images: Vec<String> = Vec::new();
+
+    loop {
         let list_services_req = ListServicesRequest {
             max_results: None,
-            next_token: next_token,
+            next_token,
             cluster: Some(cluster_name.clone()),
             launch_type: None,
             scheduling_strategy: None,
         };
 
-        ecs_client
-            .list_services(list_services_req)
-            .and_then(|list_services_res| {
-                if list_services_res.service_arns.is_some() {
-                    services.extend(list_services_res.service_arns.unwrap())
-                }
-                if list_services_res.next_token.is_none() {
-                    Ok(Loop::Break(services))
-                } else {
-                    Ok(Loop::Continue((services, list_services_res.next_token)))
-                }
-            })
-    })
-    .map_err(|err| err.into())
+        let list_services_res = ecs_client.list_services(list_services_req).await?;
+        if let Some(service_arns) = list_services_res.service_arns {
+            if !service_arns.is_empty() {
+                let got_images =
+                    get_images_of_services(ecs_client, service_arns, cluster_name.clone()).await?;
+                all_images.extend(got_images);
+            }
+        }
+        if list_services_res.next_token.is_none() {
+            break;
+        }
+        next_token = list_services_res.next_token;
+    }
+
+    Ok((cluster_name.clone(), all_images))
 }
 
-pub fn get_images_of_task_definition<'a>(
-    ecs_client: &'a EcsClient,
-    task_definitions: Vec<String>,
-) -> impl Future<Item = Vec<String>, Error = Error> + 'a {
-    let get_images_futures = task_definitions.into_iter().map(move |td| {
-        let task_definition_req = DescribeTaskDefinitionRequest {
-            task_definition: td,
-        };
-        ecs_client
-            .describe_task_definition(task_definition_req)
-            .map(|task_definition_res| {
-                task_definition_res
-                    .task_definition
-                    .and_then(|td| td.container_definitions)
-                    .and_then(|cds| cds.last().cloned())
-                    .and_then(|cd| cd.image)
-                    .and_then(|image| Some(image))
-            })
-    });
+pub async fn get_clusters(ecs_client: &EcsClient) -> Result<Vec<String>> {
+    let mut clusters: Vec<String> = Vec::new();
 
-    join_all(get_images_futures)
-        .map(|found_images| found_images.into_iter().flatten().collect())
-        .map_err(|err| err.into())
-}
-
-fn get_images_of_services<'a>(
-    ecs_client: &'a EcsClient,
-    service_arns: Vec<String>,
-    cluster_name: String,
-) -> impl Future<Item = Vec<String>, Error = Error> + 'a {
-    let describe_services_req = DescribeServicesRequest {
-        cluster: Some(cluster_name.clone()),
-        services: service_arns,
+    let mut list_clusters_req = ListClustersRequest {
+        max_results: None,
+        next_token: None,
     };
 
-    ecs_client
-        .describe_services(describe_services_req)
-        .map_err(|err| err.into())
-        .and_then(move |describe_services_res| {
-            debug!("Getting images for cluster {}", cluster_name);
-            if describe_services_res.services.is_none() {
-                return Either::A(ok(Vec::new()));
-            }
-            let task_definitions = describe_services_res
-                .services
-                .unwrap()
-                .into_iter()
-                .map(|service| service.task_definition)
-                .flatten()
-                .collect();
-
-            debug!("Got task definitions {:?}", task_definitions);
-
-            Either::B(
-                get_images_of_task_definition(ecs_client, task_definitions)
-                    .and_then(|images| ok(images)),
-            )
-        })
-}
-
-pub fn get_images_of_a_cluster<'a>(
-    ecs_client: &'a EcsClient,
-    cluster_name: String,
-) -> impl Future<Item = (String, Vec<String>), Error = Error> + 'a {
-    let cluster_name_clone = cluster_name.clone();
-    get_all_services(&ecs_client, cluster_name.clone()).and_then(move |all_services| {
-        let all_services_len = all_services.len();
-        let mut services_partions = Vec::new();
-        let partition_num = (all_services_len / 10) + 1;
-        for i in 0..partition_num {
-            let last_idx = if i == partition_num - 1 {
-                all_services_len
-            } else {
-                10 * i + 10
-            };
-            let partition = all_services[i * 10..last_idx].to_vec();
-            services_partions.push(partition);
+    loop {
+        let list_clusters_res = ecs_client.list_clusters(list_clusters_req.clone()).await?;
+        if let Some(cluster_arns) = list_clusters_res.cluster_arns {
+            clusters.extend(cluster_arns);
         }
-        join_all(services_partions.into_iter().map(move |services| {
-            get_images_of_services(ecs_client, services, cluster_name.clone())
-        }))
-        .map(move |images_partitions| {
-            (
-                cluster_name_clone,
-                images_partitions.into_iter().flatten().collect(),
-            )
-        })
-    })
+
+        if list_clusters_res.next_token.is_none() {
+            break;
+        }
+        list_clusters_req.next_token = list_clusters_res.next_token;
+    }
+    Ok(clusters)
 }
 
-pub fn get_clusters<'a>(
-    ecs_client: &'a EcsClient,
-) -> impl Future<Item = Vec<String>, Error = Error> + 'a {
-    loop_fn((Vec::new(), None), move |(mut clusters, next_token)| {
-        let list_clusters_req = ListClustersRequest {
-            max_results: None,
-            next_token: next_token,
-        };
+pub async fn get_images_of_clusters(
+    ecs_client: &EcsClient,
+) -> Result<HashMap<String, Vec<String>>> {
+    let clusters = get_clusters(ecs_client).await?;
+    debug!("Got clusters {:?}", clusters);
 
-        ecs_client
-            .list_clusters(list_clusters_req)
-            .and_then(|list_clusters_res| {
-                if list_clusters_res.cluster_arns.is_some() {
-                    clusters.extend(list_clusters_res.cluster_arns.unwrap());
-                }
-                if list_clusters_res.next_token.is_none() {
-                    Ok(Loop::Break(clusters))
-                } else {
-                    Ok(Loop::Continue((clusters, list_clusters_res.next_token)))
-                }
-            })
-    })
-    .map_err(|err| err.into())
+    let get_clusters_images_futures = clusters
+        .into_iter()
+        .map(|cluster_arn| get_images_of_a_cluster(ecs_client, cluster_arn));
+
+    let get_clusters_images_res = join_all(get_clusters_images_futures).await;
+
+    let mut res = HashMap::new();
+    for cluster_images_res in get_clusters_images_res {
+        let cluster_images_tuple = cluster_images_res?;
+        let (cluster_name, images) = cluster_images_tuple;
+        res.insert(cluster_name, images);
+    }
+
+    Ok(res)
 }
 
-pub fn get_images_of_clusters<'a>(
-    ecs_client: &'a EcsClient,
-) -> impl Future<Item = HashMap<String, Vec<String>>, Error = Error> + 'a {
-    get_clusters(&ecs_client).and_then(move |clusters_arn| {
-        debug!("Got clusters {:?}", clusters_arn);
-
-        join_all(
-            clusters_arn
-                .into_iter()
-                .map(move |cluster_arn| get_images_of_a_cluster(&ecs_client, cluster_arn)),
-        )
-        .map(|cluster_images_tuples| {
-            let mut res = HashMap::new();
-            for cluster_images_tuple in cluster_images_tuples {
-                let (cluster_name, images) = cluster_images_tuple;
-                res.insert(cluster_name, images);
-            }
-            return res;
-        })
-    })
-}
-
-pub fn build_ecs_client(connector: HttpConnector, creds: Credentials) -> EcsClient {
-    let client = request::HttpClient::from_connector(connector.clone());
+pub fn build_ecs_client(client: Arc<HttpClient>, creds: Credentials) -> EcsClient {
     let cred_provider = StaticProvider::new(
         creds.aws_access_key,
         creds.aws_secret_key,
