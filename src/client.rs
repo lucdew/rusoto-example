@@ -20,7 +20,9 @@ pub fn new_client() -> Result<HttpClient> {
         http_connector = ProxyConnector::new(connector)?;
     }
     let mut hyper_builder = Client::builder();
-    hyper_builder.pool_idle_timeout(Duration::from_secs(60));
+    hyper_builder
+        .pool_idle_timeout(Duration::from_secs(60))
+        .pool_max_idle_per_host(5);
     Ok(rusoto_core::HttpClient::from_builder(
         hyper_builder,
         http_connector,
