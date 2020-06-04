@@ -80,7 +80,7 @@ pub async fn assume_role(
     );
     let sts_client = StsClient::new_with(client, cred_provider, Region::EuWest1);
 
-    println!("Assuming role {}", role_arn.to_string());
+    debug!("Assuming role {}", role_arn.to_string());
 
     let assume_role_request = AssumeRoleRequest {
         role_arn: role_arn.to_owned(),

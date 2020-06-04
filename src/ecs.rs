@@ -69,7 +69,6 @@ async fn get_images_of_services(
             .collect();
         images.extend(some_images);
     }
-
     Ok(images)
 }
 

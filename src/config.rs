@@ -23,6 +23,7 @@ pub struct Config {
     pub aws_temp_secret_access_key: Option<String>,
     pub aws_session_token: Option<String>,
     pub aws_session_expiration: Option<DateTime<FixedOffset>>,
+    pub roles: HashMap<String, String>,
 }
 
 impl Config {
@@ -52,7 +53,7 @@ impl Config {
         Ok(config)
     }
 
-    pub fn load() -> Result<Config> {
+    pub fn load(need_roles: bool) -> Result<Config> {
         let home_dir = dirs::home_dir().context("Missing home directory")?;
         let config_path = Path::new(home_dir.as_path()).join(".awsManager.json");
 
@@ -70,6 +71,10 @@ impl Config {
 
         if config.aws_use_default_credentials {
             set_default_aws_credentials(&mut config)?;
+        }
+
+        if need_roles && config.roles.is_empty() {
+            set_roles(&mut config)?;
         }
 
         if config.aws_sts_profile.is_none() && config.aws_mfa_device_arn.is_none() {
@@ -112,6 +117,25 @@ impl Config {
             None => false,
         };
     }
+}
+
+fn set_roles(cfg: &mut Config) -> Result<()> {
+    let mut roles: HashMap<String, String> = HashMap::new();
+    loop {
+        let role_name = Input::<String>::new()
+            .with_prompt("Enter the role name")
+            .interact()?;
+        let role_arn = Input::<String>::new()
+            .with_prompt("Enter the role arn")
+            .interact()?;
+        roles.insert(role_arn, role_name);
+        if !Confirm::new().with_prompt("Add new role?").interact()? {
+            break;
+        }
+    }
+    cfg.roles = roles;
+
+    Ok(())
 }
 
 fn set_default_aws_credentials(cfg: &mut Config) -> Result<()> {
