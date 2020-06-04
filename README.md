@@ -1,6 +1,6 @@
 # Description
 
-Just an example using [Rusoto](https://rusoto.github.io/rusoto/rusoto_core/index.html) AWS Rust library through a http proxy and [Tokio](https://github.com/tokio-rs/tokio) futures combinators.
+Just an example using [Rusoto](https://rusoto.github.io/rusoto/rusoto_core/index.html) AWS Rust library through a http proxy and [Tokio](https://github.com/tokio-rs/tokio) async runtime.
 
 It uses the STS, ECS and credentials AWS services.
 
@@ -18,8 +18,3 @@ To run just do
 cargo run -- "arn:aws:iam::123456789:role/MyRoleInTheOrganization"
 ```
 
-# Notes
-
-I am just learning Rust so the code is not surely idiomatic Rust.
-
-Error management in my example is also not consistent.
