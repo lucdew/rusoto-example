@@ -1,9 +1,9 @@
 use crate::client::HttpClient;
 use crate::config;
-use read_input::prelude::*;
 
 use anyhow::Context;
 use anyhow::Result;
+use dialoguer::Input;
 use rusoto_core::region::Region;
 use rusoto_credential::StaticProvider;
 use rusoto_sts::{AssumeRoleRequest, GetSessionTokenRequest, Sts, StsClient};
@@ -23,7 +23,9 @@ pub async fn update_temp_credentials(
     client: Arc<HttpClient>,
 ) -> Result<()> {
     if !config.is_token_valid() {
-        let mfa: String = input().msg("Please enter your mfa:\n").get();
+        let mfa: String = Input::<String>::new()
+            .with_prompt("Please enter your mfa")
+            .interact()?;
 
         let cred_provider = StaticProvider::new(
             config.aws_access_key_id.clone(),
@@ -36,7 +38,12 @@ pub async fn update_temp_credentials(
 
         let get_session_token = GetSessionTokenRequest {
             duration_seconds: None,
-            serial_number: Some(config.aws_mfa_device_arn.clone()),
+            serial_number: Some(
+                config
+                    .aws_mfa_device_arn
+                    .clone()
+                    .ok_or(anyhow!("mfa device arn is not set, cannot get sts token"))?,
+            ),
             token_code: Some(mfa),
         };
         let get_session_token_res = sts_client
@@ -55,9 +62,8 @@ pub async fn update_temp_credentials(
             DateTime::parse_from_rfc3339(&credentials.expiration)
                 .context("Invalid token expiration format")?,
         );
-
-        config.persist()?;
     }
+    config.persist()?;
     Ok(())
 }
 
