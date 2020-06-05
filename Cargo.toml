@@ -1,5 +1,5 @@
 [package]
-name = "awsManagerRust"
+name = "aws_list_ecs_images"
 version = "0.2.0"
 authors = ["lucdew <848341+lucdew@users.noreply.github.com>"]
 edition = "2018"
@@ -12,7 +12,7 @@ dialoguer = "0.6"
 env_logger = "0.6"
 futures = "0.3"
 hyper-proxy = "0.7"
-hyper = "0.13.1"
+hyper = { version = "0.13.6", features = ["runtime"] }
 hyper-tls = "0.4"
 rusoto_core = "0.44"
 rusoto_credential = "0.44"
