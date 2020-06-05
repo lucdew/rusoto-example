@@ -130,12 +130,22 @@ pub async fn get_clusters(ecs_client: &EcsClient) -> Result<Vec<String>> {
 
 pub async fn get_images_of_clusters(
     ecs_client: &EcsClient,
+    cluster_includes: &Vec<String>,
 ) -> Result<HashMap<String, Vec<String>>> {
     let clusters = get_clusters(ecs_client).await?;
     debug!("Got clusters {:?}", clusters);
 
+    // TODO filter clusters
+
     let get_clusters_images_futures = clusters
         .into_iter()
+        .filter(|cluster_arn| {
+            cluster_includes.is_empty()
+                || cluster_includes
+                    .iter()
+                    .find(|ci| cluster_arn.contains(*ci))
+                    .is_some()
+        })
         .map(|cluster_arn| get_images_of_a_cluster(ecs_client, cluster_arn));
 
     let get_clusters_images_res = join_all(get_clusters_images_futures).await;
