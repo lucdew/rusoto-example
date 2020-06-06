@@ -73,8 +73,14 @@ pub async fn assume_role(
     role_arn: &String,
 ) -> Result<Credentials> {
     let cred_provider = StaticProvider::new(
-        config.aws_temp_access_key_id.clone().unwrap(),
-        config.aws_temp_secret_access_key.clone().unwrap(),
+        config
+            .aws_temp_access_key_id
+            .clone()
+            .ok_or(anyhow!("aws_temp_access_key_id is not set"))?,
+        config
+            .aws_temp_secret_access_key
+            .clone()
+            .ok_or(anyhow!("aws_temp_secret_access_keys not set"))?,
         config.aws_session_token.clone(),
         None,
     );

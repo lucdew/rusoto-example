@@ -135,8 +135,6 @@ pub async fn get_images_of_clusters(
     let clusters = get_clusters(ecs_client).await?;
     debug!("Got clusters {:?}", clusters);
 
-    // TODO filter clusters
-
     let get_clusters_images_futures = clusters
         .into_iter()
         .filter(|cluster_arn| {
