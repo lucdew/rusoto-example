@@ -19,6 +19,8 @@ use console::style;
 use futures::future::join_all;
 use rusoto_ecs::EcsClient;
 
+use ecs::Image;
+
 #[derive(Clap)]
 #[clap(version = "0.1")]
 struct CliOpts {
@@ -36,12 +38,28 @@ fn get_cluster_short_name(cluster: &String) -> String {
     cluster.split("/").last().clone().unwrap().to_owned()
 }
 
-fn get_image_short_name(image: &String) -> String {
-    image.split("/").last().clone().unwrap().to_owned()
+fn get_image_short_name(image: &Image) -> String {
+    format!(
+        "{}:{}",
+        image
+            .task_definition_name
+            .split("/")
+            .last()
+            .and_then(|l| l.split(":").next())
+            .unwrap()
+            .to_owned(),
+        image
+            .image_name
+            .split("/")
+            .last()
+            .clone()
+            .unwrap()
+            .to_owned()
+    )
 }
 
 fn print_results(
-    all_clusters_images: &Vec<HashMap<String, Vec<String>>>,
+    all_clusters_images: &Vec<HashMap<String, Vec<Image>>>,
     roles: &Vec<String>,
     config: &Config,
 ) {
@@ -57,7 +75,7 @@ fn print_results(
             let mut short_images: Vec<String> = images.iter().map(get_image_short_name).collect();
             short_images.sort();
             for image in short_images {
-                println!("    {}", get_image_short_name(&image));
+                println!("    {}", image);
             }
         }
     }
@@ -113,7 +131,7 @@ async fn main() -> Result<()> {
     )
     .await;
 
-    let images_of_clusters_res: Result<Vec<HashMap<String, Vec<String>>>> =
+    let images_of_clusters_res: Result<Vec<HashMap<String, Vec<Image>>>> =
         get_images_of_clusters_results
             .into_iter()
             .map(|ic| ic)

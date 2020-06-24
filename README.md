@@ -32,3 +32,6 @@ Using a specific role from the configuration filtering by its name from the conf
 ```
 cargo run -- "-r dev"
 ```
+
+
+Currently it outputs the image name prefixed by the task definition name for each image

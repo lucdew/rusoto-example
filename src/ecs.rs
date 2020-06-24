@@ -16,10 +16,18 @@ use rusoto_ecs::{
     ListServicesRequest,
 };
 
+#[derive(Debug)]
+pub struct Image {
+    pub image_name: String,
+    pub task_definition_name: String,
+    pub service_name: String,
+}
+
 pub async fn get_image_of_task_definition(
     ecs_client: &EcsClient,
     task_definition: String,
-) -> Result<Option<String>> {
+    service_name: String,
+) -> Result<Option<Image>> {
     let task_definition_req = DescribeTaskDefinitionRequest {
         task_definition,
         include: None,
@@ -28,19 +36,29 @@ pub async fn get_image_of_task_definition(
         .describe_task_definition(task_definition_req)
         .await?;
 
-    Ok(task_definition_res
-        .task_definition
-        .and_then(|td| td.container_definitions)
-        .and_then(|cds| cds.last().map(|cd| cd.clone()))
-        .and_then(move |cd| cd.image))
+    Ok(task_definition_res.task_definition.and_then(move |td| {
+        td.clone()
+            .task_definition_arn
+            .and_then(move |td_arn| {
+                td.container_definitions
+                    .and_then(|cds| cds.last().map(|cd| (td_arn, cd.clone())))
+            })
+            .and_then(move |(td_arn, cd)| {
+                cd.image.map(|i| Image {
+                    image_name: i,
+                    task_definition_name: td_arn,
+                    service_name,
+                })
+            })
+    }))
 }
 
 async fn get_images_of_services(
     ecs_client: &EcsClient,
     service_arns: Vec<String>,
     cluster_name: String,
-) -> Result<Vec<String>> {
-    let mut images: Vec<String> = Vec::new();
+) -> Result<Vec<Image>> {
+    let mut images: Vec<Image> = Vec::new();
     let describe_services_req = DescribeServicesRequest {
         cluster: Some(cluster_name.clone()),
         services: service_arns,
@@ -50,20 +68,25 @@ async fn get_images_of_services(
     let describe_services_res = ecs_client.describe_services(describe_services_req).await?;
 
     if let Some(services) = describe_services_res.services {
-        let task_definitions: Vec<String> = services
+        let task_definitions: Vec<(String, String)> = services
             .into_iter()
-            .filter_map(|service| service.task_definition)
+            .filter_map(|service| {
+                service
+                    .clone()
+                    .task_definition
+                    .and_then(|td| service.service_name.map(|sn| (td, sn)))
+            })
             .collect();
         let get_images_futures = task_definitions
             .into_iter()
-            .map(|td| get_image_of_task_definition(ecs_client, td));
+            .map(|(td, sn)| get_image_of_task_definition(ecs_client, td, sn));
 
         let get_images_results = join_all(get_images_futures).await;
 
-        let get_images_result: Result<Vec<Option<String>>> =
+        let get_images_result: Result<Vec<Option<Image>>> =
             get_images_results.into_iter().collect();
 
-        let some_images: Vec<String> = get_images_result?
+        let some_images: Vec<Image> = get_images_result?
             .into_iter()
             .filter_map(|image_opt| image_opt)
             .collect();
@@ -75,10 +98,10 @@ async fn get_images_of_services(
 pub async fn get_images_of_a_cluster(
     ecs_client: &EcsClient,
     cluster_name: String,
-) -> Result<(String, Vec<String>)> {
+) -> Result<(String, Vec<Image>)> {
     let mut next_token: Option<String> = None;
 
-    let mut all_images: Vec<String> = Vec::new();
+    let mut all_images: Vec<Image> = Vec::new();
 
     loop {
         let list_services_req = ListServicesRequest {
@@ -131,7 +154,7 @@ pub async fn get_clusters(ecs_client: &EcsClient) -> Result<Vec<String>> {
 pub async fn get_images_of_clusters(
     ecs_client: &EcsClient,
     cluster_includes: &Vec<String>,
-) -> Result<HashMap<String, Vec<String>>> {
+) -> Result<HashMap<String, Vec<Image>>> {
     let clusters = get_clusters(ecs_client).await?;
     debug!("Got clusters {:?}", clusters);
 
